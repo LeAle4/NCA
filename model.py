@@ -7,13 +7,11 @@ from config import DEVICE, STD_DTYPE
 
 class NCA(nn.Module):
 
-    def __init__(self, input_shape, perception_kernels_names:tuple[str] = ("sobel","laplacian"), obs_channels:int = 1, device=DEVICE, periodic=False):
+    def __init__(self, input_shape, model_size:tuple[int] = (128,), perception_kernels_names:tuple[str] = ("sobel","laplacian"), device=DEVICE, periodic=False):
         """
         Args:
             input_shape: (B, C, H, W) 
-            perception_depth: The number of times we apply the perception kernels to the input tensor, the model recieves the first and second pass independently
             perception_kernels_names: Names of the kernels to use for perception
-            obs_channels: Number of observation channels
             device: Device to use (CPU or GPU)
             periodic: Whether to use periodic boundary conditions
         """
@@ -26,7 +24,6 @@ class NCA(nn.Module):
         else:
             self.padding = "same"
 
-        self.obs_channels = obs_channels
         self.B, self.C, self.H, self.W = input_shape
 
         diffs = get_kernels(perception_kernels_names)
@@ -35,14 +32,26 @@ class NCA(nn.Module):
         perception_kernel = diffs.repeat((self.C,1,1,1))
         self.register_buffer("perception_kernel", perception_kernel)
 
-        self.linear = nn.Sequential(
-            nn.Conv2d(self.C * self.num_kernels, 128, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv2d(128, self.C, kernel_size=1)
-        )
+        self.layers = []
+        for i in range(len(model_size)):
+            self.layers.append(nn.Conv2d(self.C * self.num_kernels, model_size[i], kernel_size=1))
+            self.layers.append(nn.ReLU())
+        self.layers.append(nn.Conv2d(model_size[-1], self.C, kernel_size=1))
+        self.linear = nn.Sequential(*self.layers)
         
         self.reset_parameters()
         self.to(dtype=STD_DTYPE, device=DEVICE)
+
+        self.config = {
+            "input_shape": input_shape, 
+            "model_size": model_size,
+            "perception_kernels_names": perception_kernels_names,
+            "num_kernels": self.num_kernels,
+            "device": device,
+            "periodic": periodic,
+            "padding": self.padding,
+            "num_layers": len(model_size),
+        }
 
     def reset_parameters(self):
         """Recursively initialize the weights of the submodule layers"""
@@ -55,7 +64,10 @@ class NCA(nn.Module):
     def _padding(self, X: torch.Tensor) -> torch.Tensor:
         """Pad the input tensor"""
         if self.periodic:
-            return F.pad(X, (1,1,1,1), mode="circular")
+            # Check if any kernel is 5x5 (spatial size > 3)
+            k_size = self.perception_kernel.shape[-1]
+            pad_val = k_size // 2
+            return F.pad(X, (pad_val, pad_val, pad_val, pad_val), mode="circular")
         else:
             return X
         
@@ -74,7 +86,7 @@ class NCA(nn.Module):
         """Save the model to a file"""
         torch.save(self, path)
 
-def evolve(model: NCA, X0, iters, dt, store_every=1):
+def evolve(model: NCA, X0, iters, dt):
     """Run the NCA forward for `iters` steps.
 
     Args:
@@ -82,32 +94,15 @@ def evolve(model: NCA, X0, iters, dt, store_every=1):
         X0: Initial state tensor (B, C, H, W) on device.
         iters: Number of simulation steps.
         dt: Time step size.
-        store_every: Store a frame every N steps (1 = every step).
 
     Returns:
-        Y: Trajectory tensor (num_stored, C, H, W) on CPU.
+        Y: Trajectory tensor (iters, C, H, W) on CPU.
     """
-    num_stored = iters // store_every
-    # Store trajectory on CPU to keep GPU memory free.
-    Y = torch.zeros((num_stored,) + X0.shape[1:], dtype=STD_DTYPE)
+    Y = torch.zeros((iters,) + X0.shape, dtype=STD_DTYPE)
 
     X = X0.clone()
-    with torch.no_grad():
-        store_idx = 0
-        for i in range(iters):
-            X = X + model(X, dt)
-            if (i + 1) % store_every == 0:
-                Y[store_idx] = X.cpu()
-                store_idx += 1
+    for i in range(iters):
+        X = X + model(X, dt)
+        Y[i] = X.clone()
 
     return Y
-
-if __name__ == "__main__":
-    model = NCA((1,1,256,256), periodic = True, perception_kernels_names=("sobel","laplacian","biharmonic"))
-    model.save("model.pt")
-    model_2 = NCA.from_file("model.pt")
-    print(model_2)
-    x = torch.randn(1,1,256,256, device=DEVICE, dtype=STD_DTYPE)
-    print(model_2(x))
-    print(model_2.perception_kernel)
-    
