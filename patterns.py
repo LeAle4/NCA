@@ -130,3 +130,21 @@ def make_striped_pattern(shape, stripe_width=4, orientation="horizontal", device
         pattern = stripes.view(1, 1, 1, W).repeat(B, C, H, 1)
         
     return pattern
+
+
+def complete_pattern(shape:tuple[int, int, int, int], weights:tuple[float, float, float, float], device=DEVICE, dtype=STD_DTYPE)-> torch.Tensor:
+    """Returns a torch.tensor (B, C, H, W) with stripes, bumps and noise
+    
+    Args:
+        shape: (B, C, H, W)
+        weights: (w_stripes_h, w_stripes_v, w_bumps, w_noise)
+    """
+
+    B, C, H, W = shape
+
+    stripes_h = make_striped_pattern((B,C,H,W), stripe_width = 8, orientation = "horizontal", device=device, dtype=dtype)
+    stripes_v = make_striped_pattern((B,C,H,W), stripe_width = 8, orientation = "vertical", device=device, dtype=dtype)
+    bumps = make_multiple_gaussian_bumps((B,C,H,W), num_bumps = 3, sigma_range = (5,10), amp_range = (0.1, 0.3), device=device, dtype=dtype)
+    noise = make_random_noise((B,C,H,W), scale = 0.1, device=device, dtype=dtype)
+
+    return (stripes_h*weights[0] + stripes_v*weights[1] + bumps*weights[2] + noise*weights[3]).view(B, C, H, W)

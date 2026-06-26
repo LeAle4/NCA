@@ -4,6 +4,8 @@ and test it against the Swift–Hohenberg PDE using each starting condition in p
 Saves comparison plots for all initial conditions in a dedicated model directory.
 """
 
+import time
+import numpy as np
 import os
 import json
 import torch
@@ -21,7 +23,9 @@ import patterns
 # ═══════════════════════════════════════════════════════════════════════════
 # Configurations
 # ═══════════════════════════════════════════════════════════════════════════
-MODEL_NAME = "nca_sh_validation"
+SEED = 42
+EXTRA_T_FACTOR = 2
+MODEL_NAME = "ide_bih-full-True-8-0.5-8-0.1"
 MODELS_DIR = "models"
 OUTPUT_DIR = os.path.join("evaluation", MODEL_NAME)
 
@@ -49,7 +53,7 @@ try:
 except Exception:
     # Fallback to manual initialization and loading weights
     nca = NCA(
-        input_shape=(1, config["channels"], config["size"], config["size"]),
+        input_shape=(1, config["nca_channels"], config["size"], config["size"]),
         model_size=tuple(config["model_size"]),
         perception_kernels_names=tuple(config["kernels"]),
         periodic=config["periodic"]
@@ -62,15 +66,18 @@ print(f"[Testing] Model loaded successfully on {DEVICE}")
 # ═══════════════════════════════════════════════════════════════════════════
 # Generate initial conditions to test
 # ═══════════════════════════════════════════════════════════════════════════
-shape = (1, config["channels"], config["size"], config["size"])
+shape = (1, config["pde_channels"], config["size"], config["size"])
 
+torch.manual_seed(SEED)
+np.random.seed(SEED)
 test_patterns = {
     "random_noise": patterns.make_random_noise(shape, scale=0.1),
     "gaussian_bump": patterns.make_gaussian_bump(shape, sigma=5.0, amplitude=1.0),
     "multi_gaussian_bumps": patterns.make_multiple_gaussian_bumps(shape, num_bumps=4, sigma_range=(3.0, 6.0)),
     "cosine_waves": patterns.make_cos_sine_waves(shape, frequency=2.0, amplitude=1.0, mode="both"),
     "step_function": patterns.make_step_function(shape, radius=0.25, value_inside=1.0, value_outside=0.0),
-    "striped_pattern": patterns.make_striped_pattern(shape, stripe_width=6, orientation="horizontal")
+    "striped_pattern": patterns.make_striped_pattern(shape, stripe_width=6, orientation="horizontal"),
+    "complete": patterns.complete_pattern(shape, weights=(0.05, 0.05, 0.8, 0.2))
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -80,14 +87,22 @@ T = config["T"]
 DT = config["dt"]
 STEP_MUL = config["step_mul"]
 SH_R = config.get("sh_r", -0.1)
+ITER_N = config["iter_n"]
 
 results_summary = {}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Generalization testing
+# ═══════════════════════════════════════════════════════════════════════════
+
+T_test = int(T*EXTRA_T_FACTOR)
+total_pde_steps = T_test * STEP_MUL
+total_nca_steps = T_test - 1
 
 for name, x0 in test_patterns.items():
     print(f"\n--- Evaluating pattern: {name} ---")
     
     # 1. Run PDE simulation (ground truth)
-    total_pde_steps = T * STEP_MUL
     pde_trajectory = simulate_edp(x0, F_swift_hohen, t=total_pde_steps, dt=DT, r=SH_R)
     pde_trajectory = pde_trajectory[::STEP_MUL]  # Subsample
     
@@ -115,9 +130,13 @@ for name, x0 in test_patterns.items():
         )
         ic = torch.cat([ic, hidden], dim=1)
         
-    n_eval_steps = T - 1
+    n_eval_steps = total_nca_steps
     with torch.no_grad():
+        #Time the evolution
+        start = time.time()
         nca_trajectory = evolve(nca, ic, iters=n_eval_steps, dt=DT)
+        end = time.time()
+        print(f"NCA evolution time: {end - start} | {T_test/(end-start)} it/s")
         
     # Squeeze / extract channels to match comparison
     nca_traj = nca_trajectory[:, :, :C_pde, :, :].squeeze(1).cpu()  # (T-1, C, H, W)

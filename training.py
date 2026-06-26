@@ -6,7 +6,7 @@ Runs a training loop, saves hyperparameters to a JSON file, and compares
 the NCA-predicted trajectory against the PDE ground truth.
 """
 
-from patterns import make_multiple_gaussian_bumps
+from patterns import make_multiple_gaussian_bumps, make_random_noise
 import os
 import json
 import torch
@@ -35,7 +35,7 @@ STEP_MUL        = 1                       # PDE sub-steps per kept frame
 DT              = 0.001                   # PDE integration time-step
 ITER_N          = 8                       # NCA forward steps per training step
 
-TRAIN_ITERS     = 256                   # Training iterations
+TRAIN_ITERS     = 32                   # Training iterations
 LEARN_RATE      = 2e-3
 NUM_BATCHES     = 1
 BATCH_SIZE      = 16
@@ -49,14 +49,15 @@ NORM_GRADS      = True
 
 # NCA Model architecture configuration
 MODEL_SIZE      = (128,)
-KERNELS         = ("identity", "biharmonic")
+KERNELS         = ("identity", "sobel", "laplacian", "biharmonic")
 PERIODIC        = True
 
 # Swift–Hohenberg control parameter
 SH_R            = 0.5
 
 # Directories
-MODEL_NAME      = f"{kernels_to_name(KERNELS)}-{TRAIN_MODE}-{PERIODIC}-{ITER_N}-{SH_R}-{NCA_CHANNELS}"
+TRY = 3
+MODEL_NAME      = f"{kernels_to_name(KERNELS)}-{TRAIN_MODE}-{PERIODIC}-{ITER_N}-{SH_R}-{NCA_CHANNELS}-{NOISE_FRAC}-{TRY}"
 DIRECTORY       = "models/"
 LOG_DIR         = f"runs/{MODEL_NAME}"
 
@@ -72,9 +73,11 @@ if torch.cuda.is_available():
 # Initial condition
 # ═══════════════════════════════════════════════════════════════════════════
 #x0 = 0.1 * torch.randn(1, C, SIZE, SIZE, device=DEVICE, dtype=STD_DTYPE)
-x0 = make_multiple_gaussian_bumps(
+x0 = 0.1 * make_random_noise(
+    shape=(1, PDE_CHANNELS, SIZE, SIZE), device=DEVICE, dtype=STD_DTYPE
+    ) + 0.6*make_multiple_gaussian_bumps(
     shape=(1, PDE_CHANNELS, SIZE, SIZE), 
-    num_bumps=5,
+    num_bumps=10,
     device=DEVICE, dtype=STD_DTYPE)
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -143,6 +146,7 @@ trainer = NCA_PDE_Trainer(
     log_dir=LOG_DIR,
     noise_frac=NOISE_FRAC,
     r=SH_R,
+    periodic=PERIODIC,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -240,6 +244,8 @@ ax_mse.set_title("Per-frame MSE  —  NCA vs PDE (Swift–Hohenberg)")
 ax_mse.grid(True, alpha=0.3)
 fig_mse.tight_layout()
 
+plt.savefig(f"runs/{MODEL_NAME}/mse.png")
+
 # 2) Side-by-side snapshot comparison
 n_snapshots = min(5, n_frames)
 snap_idx = np.linspace(0, n_frames - 1, n_snapshots, dtype=int)
@@ -283,6 +289,7 @@ fig_cmp.suptitle(
 )
 fig_cmp.tight_layout()
 
+plt.savefig(f"runs/{MODEL_NAME}/comparison.png")
 plt.show()
 
 print("\n[Validation] Done.")
