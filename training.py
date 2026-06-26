@@ -49,14 +49,15 @@ NORM_GRADS      = True
 
 # NCA Model architecture configuration
 MODEL_SIZE      = (128,)
-KERNELS         = ("identity", "sobel", "laplacian", "biharmonic")
+#KERNELS         = ("identity", "sobel", "laplacian", "biharmonic")
+KERNELS         = ("identity", "biharmonic")
 PERIODIC        = True
 
 # Swift–Hohenberg control parameter
 SH_R            = 0.5
 
 # Directories
-TRY = 3
+TRY = 0
 MODEL_NAME      = f"{kernels_to_name(KERNELS)}-{TRAIN_MODE}-{PERIODIC}-{ITER_N}-{SH_R}-{NCA_CHANNELS}-{NOISE_FRAC}-{TRY}"
 DIRECTORY       = "models/"
 LOG_DIR         = f"runs/{MODEL_NAME}"
@@ -145,8 +146,7 @@ trainer = NCA_PDE_Trainer(
     directory=DIRECTORY,
     log_dir=LOG_DIR,
     noise_frac=NOISE_FRAC,
-    r=SH_R,
-    periodic=PERIODIC,
+    r=SH_R
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -194,12 +194,16 @@ if C_nca > C_pde:
 n_eval_steps = T - 1  # same horizon as the training data
 
 with torch.no_grad():
-    nca_trajectory = evolve(nca, ic, iters=n_eval_steps, dt=DT)
+    nca_frames = []
+    X = ic.clone()
+    for _ in range(n_eval_steps):
+        for _ in range(ITER_N):
+            X = X + nca(X, DT)
+        nca_frames.append(X[:, :C_pde].clone().cpu())
 
-# Keep only the observable (PDE) channels and move to CPU
-nca_traj = nca_trajectory[:, :, :C_pde, :, :].squeeze(1).cpu()  # (T-1, C, H, W)
-pde_traj = trainer.data[1:].cpu()  # (T-1, 1, C, H, W) → squeeze batch
-pde_traj = pde_traj.squeeze(1)     # (T-1, C, H, W)
+# Stack into trajectory: (T-1, C, H, W)
+nca_traj = torch.stack(nca_frames, dim=0).squeeze(1)   # (T-1, C, H, W)
+pde_traj = trainer.data[1:].cpu().squeeze(1)            # (T-1, C, H, W)
 
 # ── Per-frame MSE ─────────────────────────────────────────────────────────
 n_frames = min(nca_traj.shape[0], pde_traj.shape[0])

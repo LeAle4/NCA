@@ -130,17 +130,22 @@ for name, x0 in test_patterns.items():
         )
         ic = torch.cat([ic, hidden], dim=1)
         
-    n_eval_steps = total_nca_steps
+    # Evolve NCA matching train.py: for each real frame, run iter_n NCA steps
+    n_real_frames = total_nca_steps  # T_test - 1
     with torch.no_grad():
-        #Time the evolution
         start = time.time()
-        nca_trajectory = evolve(nca, ic, iters=n_eval_steps, dt=DT)
+        nca_frames = []
+        X = ic.clone()
+        for _ in range(n_real_frames):
+            for _ in range(ITER_N):
+                X = X + nca(X, DT)
+            nca_frames.append(X[:, :C_pde].clone().cpu())
         end = time.time()
-        print(f"NCA evolution time: {end - start} | {T_test/(end-start)} it/s")
+        print(f"NCA evolution time: {end - start:.3f}s | {n_real_frames/(end-start):.1f} frames/s")
         
-    # Squeeze / extract channels to match comparison
-    nca_traj = nca_trajectory[:, :, :C_pde, :, :].squeeze(1).cpu()  # (T-1, C, H, W)
-    pde_traj = pde_normalized[1:].squeeze(1).cpu()                 # (T-1, C, H, W)
+    # Stack into trajectory: (T-1, C, H, W)
+    nca_traj = torch.stack(nca_frames, dim=0).squeeze(1)   # (T-1, C, H, W)
+    pde_traj = pde_normalized[1:].squeeze(1).cpu()          # (T-1, C, H, W)
     
     n_frames = min(nca_traj.shape[0], pde_traj.shape[0])
     nca_traj = nca_traj[:n_frames]

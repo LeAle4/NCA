@@ -372,7 +372,7 @@ class NCA_PDE_Trainer:
                         self.directory, f"{self.model_filename}.pt"
                     )
                     self.nca_model.save(save_path)
-                    tqdm.write(f"--- Model saved at epoch {i}  (loss={mean_loss:.6f}) ---")
+                    tqdm.write(f"--- Model saved at epoch {i}  (loss={mean_loss}) ---")
 
                 with torch.no_grad():
                     ic = self.x0[:1].clone()
