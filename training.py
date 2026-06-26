@@ -6,6 +6,7 @@ Runs a training loop, saves hyperparameters to a JSON file, and compares
 the NCA-predicted trajectory against the PDE ground truth.
 """
 
+from patterns import make_multiple_gaussian_bumps
 import os
 import json
 import torch
@@ -17,41 +18,47 @@ from equations import F_swift_hohen
 from model import NCA, evolve
 from train import NCA_PDE_Trainer
 from viz import plot_snapshots
+from patterns import *
+
+def kernels_to_name(kernels:list[str]):
+    return "_".join([k[:3] for k in kernels])
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Hyperparameters Configuration
 # ═══════════════════════════════════════════════════════════════════════════
-MODEL_NAME      = "nca_sh_validation"
 SEED            = 42
 SIZE            = 64                      # Spatial resolution (H = W)
-C               = 1                       # PDE channels (scalar field u)
-T               = 50                      # Number of kept PDE frames
+NCA_CHANNELS    = 8
+PDE_CHANNELS    = 1                       # PDE channels (scalar field u)
+T               = 1024                      # Number of kept PDE frames
 STEP_MUL        = 1                       # PDE sub-steps per kept frame
 DT              = 0.001                   # PDE integration time-step
 ITER_N          = 8                       # NCA forward steps per training step
 
-TRAIN_ITERS     = 10000                   # Training iterations
+TRAIN_ITERS     = 256                   # Training iterations
 LEARN_RATE      = 2e-3
+NUM_BATCHES     = 1
 BATCH_SIZE      = 16
 OPTIMIZER       = "Nadam"
 SCHEDULER_GAMMA = 0.9999
 NOISE_FRAC      = 0.0
 REG_COEFF       = 0.0
 UPDATE_RATE     = 1.0
-TRAIN_MODE      = "full"
+TRAIN_MODE      = "differential"
 NORM_GRADS      = True
 
 # NCA Model architecture configuration
-MODEL_SIZE      = (64,)
+MODEL_SIZE      = (128,)
 KERNELS         = ("identity", "biharmonic")
 PERIODIC        = True
 
 # Swift–Hohenberg control parameter
-SH_R            = -0.1
+SH_R            = 0.5
 
 # Directories
+MODEL_NAME      = f"{kernels_to_name(KERNELS)}-{TRAIN_MODE}-{PERIODIC}-{ITER_N}-{SH_R}-{NCA_CHANNELS}"
 DIRECTORY       = "models/"
-LOG_DIR         = "runs/validation_sh"
+LOG_DIR         = f"runs/{MODEL_NAME}"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Reproducibility
@@ -64,13 +71,17 @@ if torch.cuda.is_available():
 # ═══════════════════════════════════════════════════════════════════════════
 # Initial condition
 # ═══════════════════════════════════════════════════════════════════════════
-x0 = 0.1 * torch.randn(1, C, SIZE, SIZE, device=DEVICE, dtype=STD_DTYPE)
+#x0 = 0.1 * torch.randn(1, C, SIZE, SIZE, device=DEVICE, dtype=STD_DTYPE)
+x0 = make_multiple_gaussian_bumps(
+    shape=(1, PDE_CHANNELS, SIZE, SIZE), 
+    num_bumps=5,
+    device=DEVICE, dtype=STD_DTYPE)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # NCA model
 # ═══════════════════════════════════════════════════════════════════════════
 nca = NCA(
-    input_shape=(1, C, SIZE, SIZE),
+    input_shape=(1, NCA_CHANNELS, SIZE, SIZE),
     model_size=MODEL_SIZE,
     perception_kernels_names=KERNELS,
     periodic=PERIODIC,
@@ -85,7 +96,8 @@ config_data = {
     "model_name": MODEL_NAME,
     "seed": SEED,
     "size": SIZE,
-    "channels": C,
+    "nca_channels": NCA_CHANNELS,
+    "pde_channels": PDE_CHANNELS,
     "T": T,
     "step_mul": STEP_MUL,
     "dt": DT,
@@ -105,7 +117,8 @@ config_data = {
     "periodic": PERIODIC,
     "sh_r": SH_R,
     "device": str(DEVICE),
-    "n_parameters": n_params
+    "n_parameters": n_params,
+    "num_batches": NUM_BATCHES
 }
 
 os.makedirs(DIRECTORY, exist_ok=True)
@@ -122,7 +135,7 @@ trainer = NCA_PDE_Trainer(
     x0=x0,
     F_pde=F_swift_hohen,
     T=T,
-    N_BATCHES=1,
+    N_BATCHES=NUM_BATCHES,
     step_mul=STEP_MUL,
     dt=DT,
     model_filename=MODEL_NAME,
