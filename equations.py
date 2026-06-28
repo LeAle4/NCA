@@ -38,17 +38,19 @@ def F_swift_periodic(X: torch.Tensor, Xdx, Xdy, Xdd, dt:float = 0.001, r:float= 
     ky_cut = (2.0 / 3.0) * np.max(np.abs(ky))
     mask = (np.abs(KX) <= kx_cut) & (np.abs(KY) <= ky_cut)
     
-    u_hat = fft2(u)
+    device = X.device
+    dtype = X.dtype
     
-    # Linear operator L = epsilon - (1 - K^2)^2
-    L_linear = r - (1 - K2)**2
-    denom = 1.0 - dt * L_linear
+    mask_pt = torch.from_numpy(mask).to(device=device, dtype=dtype)
+    denom = torch.from_numpy(1.0 - dt * (r - (1 - K2)**2)).to(device=device, dtype=dtype)
+    
+    u_hat = torch.fft.fft2(u, dim=(-2, -1))
     
     # Nonlinear term: u^3
     # Apply dealiasing to the nonlinear product
     nonlinear = u**3
-    nonlinear_hat = fft2(nonlinear)
-    nonlinear_hat = nonlinear_hat * mask
+    nonlinear_hat = torch.fft.fft2(nonlinear, dim=(-2, -1))
+    nonlinear_hat = nonlinear_hat * mask_pt
     
     # Update
     # u_hat_new = (u_hat - dt * nonlinear_hat) / denom
@@ -57,4 +59,4 @@ def F_swift_periodic(X: torch.Tensor, Xdx, Xdy, Xdd, dt:float = 0.001, r:float= 
     numer = u_hat - dt * nonlinear_hat
     u_hat_new = numer / denom
     
-    return np.real(ifft2(u_hat_new))
+    return torch.real(torch.fft.ifft2(u_hat_new, dim=(-2, -1)))

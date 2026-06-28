@@ -9,12 +9,13 @@ the NCA-predicted trajectory against the PDE ground truth.
 from patterns import make_multiple_gaussian_bumps, make_random_noise
 import os
 import json
+import time
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
 from config import DEVICE, STD_DTYPE
-from equations import F_swift_hohen
+from equations import F_swift_hohen, F_swift_periodic
 from model import NCA, evolve
 from train import NCA_PDE_Trainer
 from viz import plot_snapshots
@@ -28,14 +29,14 @@ def kernels_to_name(kernels:list[str]):
 # ═══════════════════════════════════════════════════════════════════════════
 SEED            = 42
 SIZE            = 64                      # Spatial resolution (H = W)
-NCA_CHANNELS    = 8
+NCA_CHANNELS    = 1
 PDE_CHANNELS    = 1                       # PDE channels (scalar field u)
 T               = 1024                      # Number of kept PDE frames
 STEP_MUL        = 1                       # PDE sub-steps per kept frame
 DT              = 0.001                   # PDE integration time-step
-ITER_N          = 8                       # NCA forward steps per training step
+ITER_N          = 1                       # NCA forward steps per training step
 
-TRAIN_ITERS     = 32                   # Training iterations
+TRAIN_ITERS     = 4000                    # Training iterations
 LEARN_RATE      = 2e-3
 NUM_BATCHES     = 1
 BATCH_SIZE      = 16
@@ -48,16 +49,17 @@ TRAIN_MODE      = "differential"
 NORM_GRADS      = True
 
 # NCA Model architecture configuration
-MODEL_SIZE      = (128,)
-#KERNELS         = ("identity", "sobel", "laplacian", "biharmonic")
-KERNELS         = ("identity", "biharmonic")
+MODEL_SIZE      = (128,64,)
+KERNELS         = ("identity", "sobel", "laplacian", "biharmonic")
+#KERNELS         = ("identity", "biharmonic")
+#KERNELS         = ("identity", "sobel", "laplacian")
 PERIODIC        = True
 
 # Swift–Hohenberg control parameter
-SH_R            = 0.5
+SH_R            = 1
 
 # Directories
-TRY = 0
+TRY = 1
 MODEL_NAME      = f"{kernels_to_name(KERNELS)}-{TRAIN_MODE}-{PERIODIC}-{ITER_N}-{SH_R}-{NCA_CHANNELS}-{NOISE_FRAC}-{TRY}"
 DIRECTORY       = "models/"
 LOG_DIR         = f"runs/{MODEL_NAME}"
@@ -137,7 +139,8 @@ print(f"[Validation] Saved hyperparameter configurations to {config_path}")
 trainer = NCA_PDE_Trainer(
     nca_model=nca,
     x0=x0,
-    F_pde=F_swift_hohen,
+#   F_pde=F_swift_hohen,
+    F_pde=F_swift_periodic,
     T=T,
     N_BATCHES=NUM_BATCHES,
     step_mul=STEP_MUL,
@@ -156,7 +159,7 @@ print("\n" + "=" * 60)
 print("  Training NCA on explicit-Euler Swift–Hohenberg")
 print("=" * 60 + "\n")
 
-trainer.train_sequence(
+training_time = trainer.train_sequence(
     TRAIN_ITERS=TRAIN_ITERS,
     iter_n=ITER_N,
     UPDATE_RATE=UPDATE_RATE,
@@ -196,10 +199,14 @@ n_eval_steps = T - 1  # same horizon as the training data
 with torch.no_grad():
     nca_frames = []
     X = ic.clone()
+    eval_start_time = time.time()
     for _ in range(n_eval_steps):
         for _ in range(ITER_N):
             X = X + nca(X, DT)
         nca_frames.append(X[:, :C_pde].clone().cpu())
+    
+    eval_time_total = time.time() - eval_start_time
+    time_per_frame = eval_time_total / n_eval_steps
 
 # Stack into trajectory: (T-1, C, H, W)
 nca_traj = torch.stack(nca_frames, dim=0).squeeze(1)   # (T-1, C, H, W)
@@ -227,7 +234,9 @@ try:
         "overall_mse": float(overall_mse),
         "overall_mae": float(overall_mae),
         "peak_mse": float(per_frame_mse.max()),
-        "min_mse": float(per_frame_mse.min())
+        "min_mse": float(per_frame_mse.min()),
+        "training_time_s": float(training_time),
+        "eval_time_per_frame_s": float(time_per_frame)
     }
     with open(config_path, "w") as f:
         json.dump(data, f, indent=4)

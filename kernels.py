@@ -38,7 +38,7 @@ BIHARMONIC_KERNEL = F.conv2d(LAPLACIAN_KERNEL.unsqueeze(0), LAPLACIAN_KERNEL.uns
 def make_5x5(kernel):
     return F.pad(kernel, (1,1,1,1), mode="constant", value = 0)
 
-def get_kernels(names:str):
+def get_kernels(names:tuple[str]) -> torch.Tensor:
     """"Helper function to obtain certain convolutional kernels depending on their name"""
     kernels = []
     expand = True if "biharmonic" in names else False

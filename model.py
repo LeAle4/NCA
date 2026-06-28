@@ -32,9 +32,13 @@ class NCA(nn.Module):
         perception_kernel = diffs.repeat((self.C,1,1,1))
         self.register_buffer("perception_kernel", perception_kernel)
 
+
         self.layers = []
-        for i in range(len(model_size)):
-            self.layers.append(nn.Conv2d(self.C * self.num_kernels, model_size[i], kernel_size=1))
+        #Base layer that takes the perception kernel output
+        self.layers.append(nn.Conv2d(self.C * self.num_kernels, model_size[0], kernel_size=1))
+        self.layers.append(nn.ReLU())
+        for i in range(1, len(model_size)):
+            self.layers.append(nn.Conv2d(model_size[i-1], model_size[i], kernel_size=1))
             self.layers.append(nn.ReLU())
         self.layers.append(nn.Conv2d(model_size[-1], self.C, kernel_size=1))
         self.linear = nn.Sequential(*self.layers)
